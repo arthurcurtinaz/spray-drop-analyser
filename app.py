@@ -3,20 +3,19 @@ import cv2
 import numpy as np
 import math
 from PIL import Image
-from streamlit_cropper import st_cropper
 
 # Configuração da página do App
 st.set_page_config(page_title="Spray Drop Analyser", page_icon="💧", layout="centered")
 
 st.title("💧 Spray Drop Analyser")
-st.write("Faça o upload ou tire a foto, ajuste o retângulo delimitador na área do papel e analise as gotas.")
+st.write("Faça o upload ou tire a foto do papel hidrossensível para realizar a análise automática.")
 
 # 1. ÁREA DE UPLOAD / CÂMERA
 st.markdown("---")
-uploaded_file = st.file_uploader("📂 Escolha ou tire a foto do papel hidrossensível...", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("📂 Escolha ou tire a foto do papel...", type=["jpg", "jpeg", "png"])
 st.markdown("---")
 
-# Barra lateral para os controles avançados
+# Barra lateral para os controlos avançados
 st.sidebar.header("⚙️ Configurações de Análise")
 
 # Seleção da Área Física de Referência
@@ -52,21 +51,17 @@ mostrar_binaria = st.sidebar.checkbox("👁️ Exibir imagem binarizada", value=
 
 # Processamento apenas se houver imagem carregada
 if uploaded_file is not None:
-    # Garante que a imagem está em RGB puro para evitar erros no cropper
     image_pil = Image.open(uploaded_file).convert('RGB')
-
-    st.subheader("✂️ Enquadre o Papel Hidrossensível")
-    st.write("Arraste as bordas do retângulo abaixo para selecionar apenas a área do papel que deseja analisar:")
-
-    # Componente interativo de retângulo delimitador (Cropper)
-    cropped_img = st_cropper(image_pil, realtime_update=True, box_aspect_ratio=None, stroke_color="#FF4B4B")
+    
+    st.subheader("🖼️ Imagem Carregada")
+    st.image(image_pil, caption="Foto enviada", use_column_width=True)
 
     st.markdown("---")
-    st.subheader("📊 Resultados da Análise na Área Selecionada")
+    st.subheader("📊 Resultados da Análise")
 
-    with st.spinner("Processando análise das gotas..."):
-        # Converte a imagem recortada para o formato do OpenCV
-        img_original = np.array(cropped_img)
+    with st.spinner("A processar análise das gotas..."):
+        # Converte a imagem para o formato do OpenCV
+        img_original = np.array(image_pil)
         img_original = cv2.cvtColor(img_original, cv2.COLOR_RGB2BGR)
 
         altura_px, largura_px, _ = img_original.shape
@@ -87,7 +82,7 @@ if uploaded_file is not None:
         limiar_final = int(limiar_otsu + sensibilidade_extra)
         _, img_binaria = cv2.threshold(img_canal, limiar_final, 255, cv2.THRESH_BINARY_INV)
 
-        # Conversão de Área Física para Micrômetros (µm) com base na área recortada
+        # Conversão de Área Física para Micrômetros (µm)
         area_total_um2 = area_fisica_cm2 * 100000000.0
         area_por_pixel_um2 = area_total_um2 / total_pixels_img if total_pixels_img > 0 else 1.0
 
@@ -113,7 +108,7 @@ if uploaded_file is not None:
                 soma_area_gotas_px += area_px
                 total_gotas += 1
 
-                # Classificação dinâmica baseada nos inputs do usuário
+                # Classificação dinâmica baseada nos inputs do utilizador
                 if diametro_um < limite_pequena:
                     pequenas += 1
                 elif limite_pequena <= diametro_um <= limite_media:
@@ -124,7 +119,7 @@ if uploaded_file is not None:
         porcentagem_cobertura = (soma_area_gotas_px / total_pixels_img * 100.0) if total_pixels_img > 0 else 0.0
 
     if mostrar_binaria:
-        st.subheader("🔍 Camada Binarizada da Seleção")
+        st.subheader("🔍 Camada Binarizada")
         img_binaria_rgb = cv2.cvtColor(img_binaria, cv2.COLOR_GRAY2RGB)
         st.image(img_binaria_rgb, caption=f"Limiar Aplicado: {limiar_final} (Preto = Gotas, Branco = Fundo)", use_column_width=True)
 
@@ -142,4 +137,4 @@ if uploaded_file is not None:
     
     st.info(f"ℹ️ Área de Referência: {area_fisica_cm2} cm² | Limiar Otsu: {limiar_otsu:.1f} + Sensibilidade: {sensibilidade_extra} = {limiar_final}")
 else:
-    st.info("👈 Por favor, envie uma foto para iniciar o enquadramento e a análise.")
+    st.info("👈 Por favor, envie uma foto para iniciar a análise.")
