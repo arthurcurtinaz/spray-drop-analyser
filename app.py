@@ -3,16 +3,17 @@ import cv2
 import numpy as np
 import math
 from PIL import Image
+from streamlit_cropper import st_cropper
 
 # Configuração da página do App
-st.set_page_config(page_title="App de Análise de Gotas", page_icon="💧", layout="centered")
+st.set_page_config(page_title="Spray Drop Analyser", page_icon="💧", layout="centered")
 
-st.title("💧 Análise de Gotas - Protótipo Mobile")
-st.write("Faça o upload da foto do papel hidrossensível para começar a análise.")
+st.title("💧 Spray Drop Analyser")
+st.write("Faça o upload ou tire a foto, ajuste o retângulo delimitador na área do papel e analise as gotas.")
 
-# 1. ÁREA DE UPLOAD
+# 1. ÁREA DE UPLOAD / CÂMERA
 st.markdown("---")
-uploaded_file = st.file_uploader("📂 Escolha a foto do papel hidrossensível...", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("📂 Escolha ou tire a foto do papel hidrossensível...", type=["jpg", "jpeg", "png"])
 st.markdown("---")
 
 # Barra lateral para os controles avançados
@@ -39,7 +40,7 @@ st.sidebar.subheader("📏 Faixas de Tamanho (µm)")
 limite_pequena = st.sidebar.number_input("Limite Máx. p/ Gotas Pequenas", min_value=50, max_value=300, value=150, step=10)
 limite_media = st.sidebar.number_input("Limite Máx. p/ Gotas Médias", min_value=100, max_value=600, value=250, step=10)
 
-# Configuração do Crivo (Agora baseado no Diâmetro em µm para facilitar o ajuste)
+# Configuração do Crivo (Filtro de Ruído)
 st.sidebar.subheader("🧹 Filtro de Crivo (Remoção de Ruído)")
 usar_crivo = st.sidebar.checkbox("Ativar Crivo", value=False)
 diametro_crivo_min = 0.0
@@ -47,17 +48,26 @@ if usar_crivo:
     diametro_crivo_min = st.sidebar.number_input("Descartar gotas com diâmetro abaixo de (µm):", min_value=1.0, max_value=100.0, value=20.0, step=5.0)
 
 # Opção para exibir a imagem binarizada
-mostrar_binaria = st.sidebar.checkbox("👁️ Exibir imagem binarizada (estilo QGIS)", value=True)
+mostrar_binaria = st.sidebar.checkbox("👁️ Exibir imagem binarizada", value=True)
 
 # Processamento apenas se houver imagem carregada
 if uploaded_file is not None:
     image_pil = Image.open(uploaded_file)
-    img_original = np.array(image_pil)
-    img_original = cv2.cvtColor(img_original, cv2.COLOR_RGB2BGR)
 
-    st.image(image_pil, caption="Imagem Original Carregada", use_column_width=True)
-    
+    st.subheader("✂️ Enquadre o Papel Hidrossensível")
+    st.write("Arraste as bordas do retângulo abaixo para selecionar apenas a área do papel que deseja analisar:")
+
+    # Componente interativo de retângulo delimitador (Cropper)
+    cropped_img = st_cropper(image_pil, realtime_update=True, box_aspect_ratio=None, stroke_color="#FF4B4B")
+
+    st.markdown("---")
+    st.subheader("📊 Resultados da Análise na Área Selecionada")
+
     with st.spinner("Processando análise das gotas..."):
+        # Converte a imagem recortada para o formato do OpenCV
+        img_original = np.array(cropped_img)
+        img_original = cv2.cvtColor(img_original, cv2.COLOR_RGB2BGR)
+
         altura_px, largura_px, _ = img_original.shape
         total_pixels_img = largura_px * altura_px
 
@@ -76,9 +86,9 @@ if uploaded_file is not None:
         limiar_final = int(limiar_otsu + sensibilidade_extra)
         _, img_binaria = cv2.threshold(img_canal, limiar_final, 255, cv2.THRESH_BINARY_INV)
 
-        # Conversão de Área Física para Micrômetros (µm)
+        # Conversão de Área Física para Micrômetros (µm) com base na área recortada
         area_total_um2 = area_fisica_cm2 * 100000000.0
-        area_por_pixel_um2 = area_total_um2 / total_pixels_img
+        area_por_pixel_um2 = area_total_um2 / total_pixels_img if total_pixels_img > 0 else 1.0
 
         # Contornos
         contornos, _ = cv2.findContours(img_binaria, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -95,7 +105,7 @@ if uploaded_file is not None:
                 area_um2 = area_px * area_por_pixel_um2
                 diametro_um = 2 * math.sqrt(area_um2 / math.pi)
 
-                # Aplica o crivo: se ativado e o diâmetro for menor que o corte, ignora a gota
+                # Aplica o crivo
                 if usar_crivo and diametro_um < diametro_crivo_min:
                     continue
 
@@ -110,10 +120,10 @@ if uploaded_file is not None:
                 else:
                     grandes += 1
 
-        porcentagem_cobertura = (soma_area_gotas_px / total_pixels_img) * 100.0
+        porcentagem_cobertura = (soma_area_gotas_px / total_pixels_img * 100.0) if total_pixels_img > 0 else 0.0
 
     if mostrar_binaria:
-        st.subheader("🔍 Camada Binarizada (Preto e Branco)")
+        st.subheader("🔍 Camada Binarizada da Seleção")
         img_binaria_rgb = cv2.cvtColor(img_binaria, cv2.COLOR_GRAY2RGB)
         st.image(img_binaria_rgb, caption=f"Limiar Aplicado: {limiar_final} (Preto = Gotas, Branco = Fundo)", use_column_width=True)
 
@@ -129,6 +139,6 @@ if uploaded_file is not None:
     col4.metric("Médias", f"{medias}")
     col5.metric("Grandes", f"{grandes}")
     
-    st.info(f"ℹ️ Área: {area_fisica_cm2} cm² | Limiar Otsu: {limiar_otsu:.1f} + Sensibilidade: {sensibilidade_extra} = {limiar_final}")
+    st.info(f"ℹ️ Área de Referência: {area_fisica_cm2} cm² | Limiar Otsu: {limiar_otsu:.1f} + Sensibilidade: {sensibilidade_extra} = {limiar_final}")
 else:
-    st.info("👈 Por favor, envie uma imagem na opção acima para iniciar a análise.")
+    st.info("👈 Por favor, envie uma foto para iniciar o enquadramento e a análise.")
