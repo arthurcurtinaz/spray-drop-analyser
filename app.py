@@ -52,7 +52,8 @@ mostrar_binaria = st.sidebar.checkbox("👁️ Exibir imagem binarizada", value=
 
 # Processamento apenas se houver imagem carregada
 if uploaded_file is not None:
-    image_pil = Image.open(uploaded_file)
+    # Garante que a imagem está em RGB puro para evitar erros no cropper
+    image_pil = Image.open(uploaded_file).convert('RGB')
 
     st.subheader("✂️ Enquadre o Papel Hidrossensível")
     st.write("Arraste as bordas do retângulo abaixo para selecionar apenas a área do papel que deseja analisar:")
