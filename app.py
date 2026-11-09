@@ -193,19 +193,19 @@ if uploaded_file is not None:
     col_v3.metric("D0.9", f"{d09:.1f} µm")
     col_v4.metric("Amplitude (Span)", f"{span:.2f}")
 
-    # Barra Visual Dinâmica para o Span (1.0 = Verde a 2.0 = Vermelho)
+    # Barra Visual Dinâmica para o Span (0 a 2, onde 0 é verde e 2 é vermelho)
     if total_gotas > 0:
-        span_limitado = max(1.0, min(2.0, span))
-        percentual_barra = int((span_limitado - 1.0) / 1.0 * 100)
+        span_limitado = max(0.0, min(2.0, span))
+        percentual_barra = int((span_limitado / 2.0) * 100)
         
         if span < 1.2:
-            cor_hex = "#2e7d32"
+            cor_hex = "#2e7d32"  # Verde
             status_msg = "Excelente (Muito Homogêneo)"
         elif span <= 1.6:
-            cor_hex = "#f57c00"
+            cor_hex = "#f57c00"  # Laranja
             status_msg = "Moderado (Padrão Agrícola)"
         else:
-            cor_hex = "#c62828"
+            cor_hex = "#c62828"  # Vermelho
             status_msg = "Alto (Heterogêneo)"
 
         st.markdown(f"""
@@ -216,9 +216,9 @@ if uploaded_file is not None:
             <div style="background-color: {cor_hex}; width: {percentual_barra}%; height: 100%; transition: width 0.4s ease;"></div>
         </div>
         <div style="display: flex; justify-content: space-between; font-size: 11px; color: #666; margin-top: 3px;">
-            <span>🟢 1.0 (Homogêneo)</span>
-            <span>1.5</span>
-            <span>🔴 2.0+ (Heterogêneo)</span>
+            <span>🟢 0.0 (Homogêneo)</span>
+            <span>1.0</span>
+            <span>🔴 2.0 (Heterogêneo)</span>
         </div>
         """, unsafe_allow_html=True)
 
