@@ -48,12 +48,17 @@ st.sidebar.subheader("📏 Faixas de Contagem (µm)")
 limite_pequena = st.sidebar.number_input("Limite Máx. p/ Gotas Pequenas", min_value=50, max_value=300, value=150, step=10)
 limite_media = st.sidebar.number_input("Limite Máx. p/ Gotas Médias", min_value=100, max_value=600, value=250, step=10)
 
-# Configuração do Crivo (Filtro de Ruído)
-st.sidebar.subheader("🧹 Filtro de Crivo (Remoção de Ruído)")
-usar_crivo = st.sidebar.checkbox("Ativar Crivo", value=False)
+# Configuração do Crivo e Teto Máximo (Filtros de Ruído)
+st.sidebar.subheader("🧹 Filtros de Ruído e Limites")
+usar_crivo = st.sidebar.checkbox("Ativar Crivo Mínimo (remover poeira)", value=False)
 diametro_crivo_min = 0.0
 if usar_crivo:
-    diametro_crivo_min = st.sidebar.number_input("Descartar gotas com diâmetro abaixo de (µm):", min_value=1.0, max_value=100.0, value=20.0, step=5.0)
+    diametro_crivo_min = st.sidebar.number_input("Descartar gotas abaixo de (µm):", min_value=1.0, max_value=100.0, value=20.0, step=5.0)
+
+usar_teto = st.sidebar.checkbox("Ativar Teto Máximo (remover borrões/uniões)", value=True)
+diametro_teto_max = 800.0
+if usar_teto:
+    diametro_teto_max = st.sidebar.number_input("Descartar gotas acima de (µm):", min_value=300.0, max_value=2000.0, value=800.0, step=50.0)
 
 # Opção para exibir a imagem binarizada
 mostrar_binaria = st.sidebar.checkbox("👁️ Exibir imagem binarizada", value=True)
@@ -116,8 +121,12 @@ if uploaded_file is not None:
                 area_um2 = area_px * area_por_pixel_um2
                 diametro_um = 2 * math.sqrt(area_um2 / math.pi)
 
-                # Aplica o crivo
+                # Aplica o crivo (filtro mínimo)
                 if usar_crivo and diametro_um < diametro_crivo_min:
+                    continue
+                
+                # Aplica o teto (filtro máximo para manchas unidas)
+                if usar_teto and diametro_um > diametro_teto_max:
                     continue
 
                 soma_area_gotas_px += area_px
@@ -186,19 +195,17 @@ if uploaded_file is not None:
 
     # Barra Visual Dinâmica para o Span (1.0 = Verde a 2.0 = Vermelho)
     if total_gotas > 0:
-        # Normaliza o span entre 1.0 e 2.0 para preencher a barra de 0 a 100%
         span_limitado = max(1.0, min(2.0, span))
         percentual_barra = int((span_limitado - 1.0) / 1.0 * 100)
         
-        # Define cor e texto com base na faixa
         if span < 1.2:
-            cor_hex = "#2e7d32"  # Verde (Excelente / Muito Homogêneo)
+            cor_hex = "#2e7d32"
             status_msg = "Excelente (Muito Homogêneo)"
         elif span <= 1.6:
-            cor_hex = "#f57c00"  # Laranja/Amarelo (Moderado / Padrão)
+            cor_hex = "#f57c00"
             status_msg = "Moderado (Padrão Agrícola)"
         else:
-            cor_hex = "#c62828"  # Vermelho (Alto / Heterogêneo)
+            cor_hex = "#c62828"
             status_msg = "Alto (Heterogêneo)"
 
         st.markdown(f"""
