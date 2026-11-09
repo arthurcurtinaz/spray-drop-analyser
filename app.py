@@ -184,7 +184,39 @@ if uploaded_file is not None:
     col_v3.metric("D0.9", f"{d09:.1f} µm")
     col_v4.metric("Amplitude (Span)", f"{span:.2f}")
 
+    # Barra Visual Dinâmica para o Span (1.0 = Verde a 2.0 = Vermelho)
+    if total_gotas > 0:
+        # Normaliza o span entre 1.0 e 2.0 para preencher a barra de 0 a 100%
+        span_limitado = max(1.0, min(2.0, span))
+        percentual_barra = int((span_limitado - 1.0) / 1.0 * 100)
+        
+        # Define cor e texto com base na faixa
+        if span < 1.2:
+            cor_hex = "#2e7d32"  # Verde (Excelente / Muito Homogêneo)
+            status_msg = "Excelente (Muito Homogêneo)"
+        elif span <= 1.6:
+            cor_hex = "#f57c00"  # Laranja/Amarelo (Moderado / Padrão)
+            status_msg = "Moderado (Padrão Agrícola)"
+        else:
+            cor_hex = "#c62828"  # Vermelho (Alto / Heterogêneo)
+            status_msg = "Alto (Heterogêneo)"
+
+        st.markdown(f"""
+        <div style="margin-top: 10px; margin-bottom: 5px;">
+            <b>Avaliação de Homogeneidade (Span):</b> <span style="color: {cor_hex}; font-weight: bold;">{span:.2f} — {status_msg}</span>
+        </div>
+        <div style="background-color: #e0e0e0; border-radius: 6px; width: 100%; height: 14px; overflow: hidden;">
+            <div style="background-color: {cor_hex}; width: {percentual_barra}%; height: 100%; transition: width 0.4s ease;"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 11px; color: #666; margin-top: 3px;">
+            <span>🟢 1.0 (Homogêneo)</span>
+            <span>1.5</span>
+            <span>🔴 2.0+ (Heterogêneo)</span>
+        </div>
+        """, unsafe_allow_html=True)
+
     # Distribuição por Contagem
+    st.markdown("---")
     st.subheader(f"📊 Contagem por Tamanho (Pequenas < {limite_pequena}µm | Médias até {limite_media}µm)")
     col3, col4, col5 = st.columns(3)
     col3.metric("Pequenas", f"{pequenas}")
