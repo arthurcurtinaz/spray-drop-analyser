@@ -4,10 +4,7 @@ import numpy as np
 import math
 from PIL import Image
 
-# Configuração da página do App
-st.set_page_config(page_title="Spray Drop Analyser", page_icon="💧", layout="centered")
-
-# --- CONFIGURAÇÃO DE PWA PARA INSTALAÇÃO DIRETA ---
+# --- CONFIGURAÇÃO DE PWA COM ÍCONE DE GOTA ---
 pwa_code = """
 <link rel="manifest" href="data:application/manifest+json,{
   &quot;name&quot;: &quot;Spray Drop Analyser&quot;,
@@ -18,7 +15,7 @@ pwa_code = """
   &quot;theme_color&quot;: &quot;#0e1117&quot;,
   &quot;icons&quot;: [
     {
-      &quot;src&quot;: &quot;https://cdn-icons-png.flaticon.com/512/2933/2933754.png&quot;,
+      &quot;src&quot;: &quot;https://cdn-icons-png.flaticon.com/512/727/727799.png&quot;,
       &quot;sizes&quot;: &quot;512x512&quot;,
       &quot;type&quot;: &quot;image/png&quot;
     }
