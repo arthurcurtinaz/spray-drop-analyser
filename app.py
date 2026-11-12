@@ -70,8 +70,8 @@ sensibilidade_extra = st.sidebar.slider(
 )
 
 st.sidebar.subheader("📏 Limites de Classificação (µm)")
-limite_pequena = st.sidebar.number_input("Limite Máx. p/ Gotas Finas/Pequenas", min_value=50, max_value=300, value=150, step=10)
-limite_grande = st.sidebar.number_input("Limite Mín. p/ Gotas Grandes", min_value=200, max_value=600, value=300, step=10)
+limite_pequena = st.sidebar.number_input("Limite Máx. p/ Gotas Finas", min_value=50, max_value=300, value=150, step=10)
+limite_grande = st.sidebar.number_input("Limite Mín. p/ Gotas Médias/Grossas", min_value=200, max_value=600, value=300, step=10)
 
 st.sidebar.subheader("🧹 Filtros de Ruído (Crivo e Teto)")
 usar_crivo = st.sidebar.checkbox("Ativar Crivo Mínimo (Poeira)", value=False)
@@ -89,7 +89,7 @@ if usar_teto:
 # MODO 1: ANÁLISE INDIVIDUAL
 # ==========================================
 if modo_app == "📊 Análise Individual":
-    st.write("Faça o upload de uma foto individual para visualizar a binarização, contornos e o relatório detalhado.")
+    st.write("Faça o upload de uma foto individual para visualizar o limiar calculado, binarização, contornos e o relatório detalhado.")
     
     uploaded_file = st.file_uploader("📂 Escolha a foto do papel hidrossensível", type=["jpg", "jpeg", "png"])
     
@@ -110,6 +110,7 @@ if modo_app == "📊 Análise Individual":
         else:
             img_canal = cv2.cvtColor(img_original, cv2.COLOR_BGR2GRAY)
 
+        # Cálculo de Otsu e Limiar Final
         limiar_otsu, _ = cv2.threshold(img_canal, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         limiar_final = int(max(0, min(255, limiar_otsu + sensibilidade_extra)))
         _, img_binaria = cv2.threshold(img_canal, limiar_final, 255, cv2.THRESH_BINARY_INV)
@@ -122,7 +123,7 @@ if modo_app == "📊 Análise Individual":
         total_gotas = 0
         gotas_finas = 0
         gotas_medias = 0
-        gotas_grandes = 0
+        gotas_grossas = 0
         soma_area_gotas_px = 0
         
         diametros_lista = []
@@ -150,7 +151,7 @@ if modo_app == "📊 Análise Individual":
                 if diametro_um < limite_pequena:
                     gotas_finas += 1
                 elif diametro_um > limite_grande:
-                    gotas_grandes += 1
+                    gotas_grossas += 1
                 else:
                     gotas_medias += 1
 
@@ -180,6 +181,7 @@ if modo_app == "📊 Análise Individual":
                 if dmv > 0:
                     span = (d09 - d01) / dmv
 
+        # Layout de Exibição de Imagens
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Imagem Original")
@@ -190,6 +192,10 @@ if modo_app == "📊 Análise Individual":
             st.image(img_contornos_rgb, use_column_width=True)
 
         st.markdown("---")
+        
+        # Exibição do Limiar Calculado por Otsu
+        st.info(f"🔍 **Parâmetros de Binarização:** Limiar base de Otsu = **{int(limiar_otsu)}** | Limiar Aplicado (com Offset) = **{limiar_final}**")
+
         st.subheader("📈 Relatório de Resultados")
         
         m1, m2, m3, m4 = st.columns(4)
@@ -198,11 +204,23 @@ if modo_app == "📊 Análise Individual":
         m3.metric("DMV (D0.5)", f"{dmv:.1f} µm")
         m4.metric("Span", f"{span:.2f}")
 
-        r1, r2, r3, r4 = st.columns(4)
+        r1, r2, r3, r4, r5 = st.columns(5)
         r1.metric("D0.1", f"{d01:.1f} µm")
         r2.metric("D0.9", f"{d09:.1f} µm")
-        r3.metric(f"Gotas Finas (<{limite_pequena}µm)", gotas_finas)
-        r4.metric(f"Gotas Grandes (>{limite_grande}µm)", gotas_grandes)
+        r3.metric(f"Finas (<{limite_pequena}µm)", gotas_finas)
+        r4.metric("Médias", gotas_medias)
+        r5.metric(f"Grossas (>{limite_grande}µm)", gotas_grossas)
+
+        # Barra de Homogeneidade do Span (0 a 2)
+        st.markdown("### 📊 Indicador de Homogeneidade (Span)")
+        span_proporcao = min(max(span / 2.0, 0.0), 1.0)
+        st.progress(span_proporcao)
+        if span < 1.0:
+            st.success("✅ **Homogeneidade Excelente:** Span baixo (< 1.0) indica gotas de tamanhos muito uniformes.")
+        elif span <= 1.5:
+            st.warning("⚠️ **Homogeneidade Moderada:** Span entre 1.0 e 1.5.")
+        else:
+            st.error("❌ **Homogeneidade Baixa:** Span alto (> 1.5) indica alta dispersão de tamanhos de gotas.")
 
 
 # ==========================================
@@ -254,7 +272,7 @@ else:
                 total_gotas = 0
                 gotas_finas = 0
                 gotas_medias = 0
-                gotas_grandes = 0
+                gotas_grossas = 0
                 soma_area_gotas_px = 0
                 diametros_lista = []
                 volumes_lista = []
@@ -279,7 +297,7 @@ else:
                         if diametro_um < limite_pequena:
                             gotas_finas += 1
                         elif diametro_um > limite_grande:
-                            gotas_grandes += 1
+                            gotas_grossas += 1
                         else:
                             gotas_medias += 1
 
@@ -309,11 +327,13 @@ else:
 
                 resultados_lote.append({
                     "Arquivo": uploaded_file.name,
+                    "Limiar Otsu": int(limiar_otsu),
+                    "Limiar Usado": limiar_final,
                     "Total Gotas": total_gotas,
                     "Cobertura (%)": round(porcentagem_cobertura, 2),
                     f"Gotas Finas (<{limite_pequena}µm)": gotas_finas,
                     "Gotas Médias": gotas_medias,
-                    f"Gotas Grandes (>{limite_grande}µm)": gotas_grandes,
+                    f"Gotas Grossas (>{limite_grande}µm)": gotas_grossas,
                     "D0.1 (µm)": round(d01, 1),
                     "DMV / D0.5 (µm)": round(dmv, 1),
                     "D0.9 (µm)": round(d09, 1),
@@ -334,6 +354,6 @@ else:
             st.download_button(
                 label="📥 Baixar Planilha Consolidada Completa (.xlsx)",
                 data=processed_data,
-                file_name="relatorio_lote_gotas_detalhado.xlsx",
+                file_name="relatorio_lote_gotas_completo.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
