@@ -7,6 +7,34 @@ from PIL import Image
 # Configuração da página do App
 st.set_page_config(page_title="Spray Drop Analyser", page_icon="💧", layout="centered")
 
+# --- CONFIGURAÇÃO DE PWA PARA INSTALAÇÃO DIRETA ---
+pwa_code = """
+<link rel="manifest" href="data:application/manifest+json,{
+  &quot;name&quot;: &quot;Spray Drop Analyser&quot;,
+  &quot;short_name&quot;: &quot;SprayDrop&quot;,
+  &quot;start_url&quot;: &quot;.&quot;,
+  &quot;display&quot;: &quot;standalone&quot;,
+  &quot;background_color&quot;: &quot;#ffffff&quot;,
+  &quot;theme_color&quot;: &quot;#0e1117&quot;,
+  &quot;icons&quot;: [
+    {
+      &quot;src&quot;: &quot;https://cdn-icons-png.flaticon.com/512/2933/2933754.png&quot;,
+      &quot;sizes&quot;: &quot;512x512&quot;,
+      &quot;type&quot;: &quot;image/png&quot;
+    }
+  ]
+}">
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('data:text/javascript,self.addEventListener("fetch", function(e) {});');
+  }
+</script>
+"""
+st.markdown(pwa_code, unsafe_allow_html=True)
+
+# Configuração da página do App
+st.set_page_config(page_title="Spray Drop Analyser", page_icon="💧", layout="centered")
+
 st.title("💧 Spray Drop Analyser")
 st.write("Faça o upload ou tire a foto do papel hidrossensível para realizar a análise automática.")
 
