@@ -70,8 +70,8 @@ sensibilidade_extra = st.sidebar.slider(
 )
 
 st.sidebar.subheader("📏 Limites de Classificação (µm)")
-limite_pequena = st.sidebar.number_input("Limite Máx. p/ Gotas Pequenas", min_value=50, max_value=300, value=150, step=10)
-limite_media = st.sidebar.number_input("Limite Máx. p/ Gotas Médias", min_value=100, max_value=600, value=250, step=10)
+limite_pequena = st.sidebar.number_input("Limite Máx. p/ Gotas Finas/Pequenas", min_value=50, max_value=300, value=150, step=10)
+limite_grande = st.sidebar.number_input("Limite Mín. p/ Gotas Grandes", min_value=200, max_value=600, value=300, step=10)
 
 st.sidebar.subheader("🧹 Filtros de Ruído (Crivo e Teto)")
 usar_crivo = st.sidebar.checkbox("Ativar Crivo Mínimo (Poeira)", value=False)
@@ -101,7 +101,6 @@ if modo_app == "📊 Análise Individual":
         altura_px, largura_px, _ = img_original.shape
         total_pixels_img = largura_px * altura_px
 
-        # Seleção de Canal de Cor
         if canal_cor == 'Azul':
             img_canal = img_original[:, :, 0]
         elif canal_cor == 'Verde':
@@ -111,21 +110,19 @@ if modo_app == "📊 Análise Individual":
         else:
             img_canal = cv2.cvtColor(img_original, cv2.COLOR_BGR2GRAY)
 
-        # Limiar Otsu + Offset
         limiar_otsu, _ = cv2.threshold(img_canal, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         limiar_final = int(max(0, min(255, limiar_otsu + sensibilidade_extra)))
         _, img_binaria = cv2.threshold(img_canal, limiar_final, 255, cv2.THRESH_BINARY_INV)
 
-        # Calibração Física
         area_total_um2 = area_fisica_cm2 * 100000000.0
         area_por_pixel_um2 = area_total_um2 / total_pixels_img if total_pixels_img > 0 else 1.0
 
         contornos, _ = cv2.findContours(img_binaria, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         total_gotas = 0
-        pequenas = 0
-        medias = 0
-        grandes = 0
+        gotas_finas = 0
+        gotas_medias = 0
+        gotas_grandes = 0
         soma_area_gotas_px = 0
         
         diametros_lista = []
@@ -151,17 +148,16 @@ if modo_app == "📊 Análise Individual":
                 volumes_lista.append(volume_gota)
 
                 if diametro_um < limite_pequena:
-                    pequenas += 1
-                elif limite_pequena <= diametro_um <= limite_media:
-                    medias += 1
+                    gotas_finas += 1
+                elif diametro_um > limite_grande:
+                    gotas_grandes += 1
                 else:
-                    grandes += 1
+                    gotas_medias += 1
 
                 cv2.drawContours(img_contornos, [c], -1, (0, 255, 0), 2)
 
         porcentagem_cobertura = (soma_area_gotas_px / total_pixels_img * 100.0) if total_pixels_img > 0 else 0.0
 
-        # Cálculos Volumétricos ASABE
         d01, dmv, d09, span = 0.0, 0.0, 0.0, 0.0
         if total_gotas > 0:
             dados_ordenados = sorted(zip(diametros_lista, volumes_lista), key=lambda x: x[0])
@@ -184,7 +180,6 @@ if modo_app == "📊 Análise Individual":
                 if dmv > 0:
                     span = (d09 - d01) / dmv
 
-        # Layout de Exibição
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Imagem Original")
@@ -206,15 +201,15 @@ if modo_app == "📊 Análise Individual":
         r1, r2, r3, r4 = st.columns(4)
         r1.metric("D0.1", f"{d01:.1f} µm")
         r2.metric("D0.9", f"{d09:.1f} µm")
-        r3.metric("Gotas Pequenas", pequenas)
-        r4.metric("Gotas Médias/Grandes", medias + grandes)
+        r3.metric(f"Gotas Finas (<{limite_pequena}µm)", gotas_finas)
+        r4.metric(f"Gotas Grandes (>{limite_grande}µm)", gotas_grandes)
 
 
 # ==========================================
 # MODO 2: ANÁLISE EM LOTE E EXPORTAÇÃO EXCEL
 # ==========================================
 else:
-    st.write("📂 Faça o upload de **várias fotos** de uma vez para processar o lote completo e gerar a planilha consolidada.")
+    st.write("📂 Faça o upload de **várias fotos** de uma vez para processar o lote completo e gerar a planilha detalhada em Excel.")
     
     uploaded_files = st.file_uploader(
         "Selecione as fotos do papel hidrossensível", 
@@ -257,6 +252,9 @@ else:
                 contornos, _ = cv2.findContours(img_binaria, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
                 total_gotas = 0
+                gotas_finas = 0
+                gotas_medias = 0
+                gotas_grandes = 0
                 soma_area_gotas_px = 0
                 diametros_lista = []
                 volumes_lista = []
@@ -277,6 +275,13 @@ else:
                         volume_gota = (math.pi / 6.0) * (diametro_um ** 3)
                         diametros_lista.append(diametro_um)
                         volumes_lista.append(volume_gota)
+
+                        if diametro_um < limite_pequena:
+                            gotas_finas += 1
+                        elif diametro_um > limite_grande:
+                            gotas_grandes += 1
+                        else:
+                            gotas_medias += 1
 
                 porcentagem_cobertura = (soma_area_gotas_px / total_pixels_img * 100.0) if total_pixels_img > 0 else 0.0
 
@@ -306,6 +311,9 @@ else:
                     "Arquivo": uploaded_file.name,
                     "Total Gotas": total_gotas,
                     "Cobertura (%)": round(porcentagem_cobertura, 2),
+                    f"Gotas Finas (<{limite_pequena}µm)": gotas_finas,
+                    "Gotas Médias": gotas_medias,
+                    f"Gotas Grandes (>{limite_grande}µm)": gotas_grandes,
                     "D0.1 (µm)": round(d01, 1),
                     "DMV / D0.5 (µm)": round(dmv, 1),
                     "D0.9 (µm)": round(d09, 1),
@@ -324,8 +332,8 @@ else:
             processed_data = output.getvalue()
 
             st.download_button(
-                label="📥 Baixar Planilha Consolidada (.xlsx)",
+                label="📥 Baixar Planilha Consolidada Completa (.xlsx)",
                 data=processed_data,
-                file_name="relatorio_lote_gotas.xlsx",
+                file_name="relatorio_lote_gotas_detalhado.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
