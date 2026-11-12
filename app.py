@@ -2,259 +2,146 @@ import streamlit as st
 import cv2
 import numpy as np
 import math
+import pandas as pd
 from PIL import Image
+import io
 
-# --- CONFIGURAÇÃO DE PWA COM ÍCONE DE GOTA ---
-pwa_code = """
-<link rel="manifest" href="data:application/manifest+json,{
-  &quot;name&quot;: &quot;Spray Drop Analyser&quot;,
-  &quot;short_name&quot;: &quot;SprayDrop&quot;,
-  &quot;start_url&quot;: &quot;.&quot;,
-  &quot;display&quot;: &quot;standalone&quot;,
-  &quot;background_color&quot;: &quot;#ffffff&quot;,
-  &quot;theme_color&quot;: &quot;#0e1117&quot;,
-  &quot;icons&quot;: [
-    {
-      &quot;src&quot;: &quot;https://cdn-icons-png.flaticon.com/512/727/727799.png&quot;,
-      &quot;sizes&quot;: &quot;512x512&quot;,
-      &quot;type&quot;: &quot;image/png&quot;
-    }
-  ]
-}">
-<script>
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('data:text/javascript,self.addEventListener("fetch", function(e) {});');
-  }
-</script>
-"""
-st.markdown(pwa_code, unsafe_allow_html=True)
+# Configuração da página
+st.set_page_config(page_title="Spray Drop Analyser - Lote", page_icon="💧", layout="centered")
 
-# Configuração da página do App
-st.set_page_config(page_title="Spray Drop Analyser", page_icon="💧", layout="centered")
+st.title("💧 Spray Drop Analyser (Análise em Lote)")
+st.write("Faça o upload de várias fotos de papel hidrossensível para processar o lote e exportar em Excel.")
 
-st.title("💧 Spray Drop Analyser")
-st.write("Faça o upload ou tire a foto do papel hidrossensível para realizar a análise automática.")
-
-# 1. ÁREA DE UPLOAD / CÂMERA
-st.markdown("---")
-uploaded_file = st.file_uploader("📂 Escolha ou tire a foto do papel...", type=["jpg", "jpeg", "png"])
-st.markdown("---")
-
-# Barra lateral para os controlos avançados
-st.sidebar.header("⚙️ Configurações de Análise")
-
-# Seleção da Área Física de Referência
-tipo_papel = st.sidebar.selectbox(
-    "Área Física de Referência", 
-    ["Papel Padrão (19.75 cm²)", "Amostra Pequena (1.00 cm²)", "Personalizado (cm²)"]
-)
-
-if "Personalizado" in tipo_papel:
-    area_fisica_cm2 = st.sidebar.number_input("Digite a área em cm²", min_value=0.1, max_value=100.0, value=19.75, step=0.25)
-elif "1.00" in tipo_papel:
-    area_fisica_cm2 = 1.00
-else:
-    area_fisica_cm2 = 19.75
-
+# Barra lateral para configurações globais do lote
+st.sidebar.header("⚙️ Configurações do Lote")
+area_fisica_cm2 = st.sidebar.number_input("Área Física de Referência (cm²)", value=19.75)
 canal_cor = st.sidebar.selectbox("Canal de Cor", ["Verde", "Azul", "Vermelho", "Cinza"], index=0)
+sensibilidade_extra = st.sidebar.slider("Ajuste Fino do Limiar (Offset)", -50, 50, 0)
+diametro_teto_max = st.sidebar.number_input("Teto Máximo (µm)", value=800.0)
 
-# Ajuste fino do Limiar (-50 a +50)
-sensibilidade_extra = st.sidebar.slider(
-    "Ajuste Fino do Limiar (Offset)", 
-    min_value=-50, 
-    max_value=50, 
-    value=0, 
-    step=1,
-    help="Esquerda (-) diminui o limiar (mais sensível). Direita (+) aumenta o limiar (menos sensível)."
+# UPLOAD DE MÚLTIPLOS ARQUIVOS
+st.markdown("---")
+uploaded_files = st.file_uploader(
+    "📂 Escolha as fotos do papel hidrossensível (várias de uma vez)", 
+    type=["jpg", "jpeg", "png"], 
+    accept_multiple_files=True
 )
+st.markdown("---")
 
-# Configuração dos Limites de Tamanho para Contagem
-st.sidebar.subheader("📏 Faixas de Contagem (µm)")
-limite_pequena = st.sidebar.number_input("Limite Máx. p/ Gotas Pequenas", min_value=50, max_value=300, value=150, step=10)
-limite_media = st.sidebar.number_input("Limite Máx. p/ Gotas Médias", min_value=100, max_value=600, value=250, step=10)
-
-# Configuração do Crivo e Teto Máximo (Filtros de Ruído)
-st.sidebar.subheader("🧹 Filtros de Ruído e Limites")
-usar_crivo = st.sidebar.checkbox("Ativar Crivo Mínimo (remover poeira)", value=False)
-diametro_crivo_min = 0.0
-if usar_crivo:
-    diametro_crivo_min = st.sidebar.number_input("Descartar gotas abaixo de (µm):", min_value=1.0, max_value=100.0, value=20.0, step=5.0)
-
-usar_teto = st.sidebar.checkbox("Ativar Teto Máximo (remover borrões/uniões)", value=True)
-diametro_teto_max = 800.0
-if usar_teto:
-    diametro_teto_max = st.sidebar.number_input("Descartar gotas acima de (µm):", min_value=300.0, max_value=2000.0, value=800.0, step=50.0)
-
-# Opção para exibir a imagem binarizada
-mostrar_binaria = st.sidebar.checkbox("👁️ Exibir imagem binarizada", value=True)
-
-# Processamento apenas se houver imagem carregada
-if uploaded_file is not None:
-    image_pil = Image.open(uploaded_file).convert('RGB')
+if uploaded_files:
+    st.info(f"📁 {len(uploaded_files)} imagem(ns) carregada(s) na fila de processamento.")
     
-    st.subheader("🖼️ Imagem Carregada")
-    st.image(image_pil, caption="Foto enviada", use_column_width=True)
-
-    st.markdown("---")
-    st.subheader("📊 Resultados da Análise")
-
-    with st.spinner("A processar análise das gotas..."):
-        # Converte a imagem para o formato do OpenCV
-        img_original = np.array(image_pil)
-        img_original = cv2.cvtColor(img_original, cv2.COLOR_RGB2BGR)
-
-        altura_px, largura_px, _ = img_original.shape
-        total_pixels_img = largura_px * altura_px
-
-        # Seleção de Canal de Cor
-        if canal_cor == 'Azul':
-            img_canal = img_original[:, :, 0]
-        elif canal_cor == 'Verde':
-            img_canal = img_original[:, :, 1]
-        elif canal_cor == 'Vermelho':
-            img_canal = img_original[:, :, 2]
-        else:
-            img_canal = cv2.cvtColor(img_original, cv2.COLOR_BGR2GRAY)
-
-        # Otsu Automático + Ajuste Fino (-50 a +50)
-        limiar_otsu, _ = cv2.threshold(img_canal, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        limiar_final = int(limiar_otsu + sensibilidade_extra)
-        limiar_final = max(0, min(255, limiar_final))
+    if st.button("🚀 Processar Lote Completo e Gerar Relatório"):
+        resultados_lote = []
         
-        _, img_binaria = cv2.threshold(img_canal, limiar_final, 255, cv2.THRESH_BINARY_INV)
-
-        # Conversão de Área Física para Micrômetros (µm)
-        area_total_um2 = area_fisica_cm2 * 100000000.0
-        area_por_pixel_um2 = area_total_um2 / total_pixels_img if total_pixels_img > 0 else 1.0
-
-        # Contornos
-        contornos, _ = cv2.findContours(img_binaria, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        total_gotas = 0
-        pequenas = 0    
-        medias = 0      
-        grandes = 0     
-        soma_area_gotas_px = 0
-
-        # Listas para cálculo volumétrico rigoroso
-        diametros_lista = []
-        volumes_lista = []
-
-        for c in contornos:
-            area_px = cv2.contourArea(c)
-            if area_px > 0:
-                area_um2 = area_px * area_por_pixel_um2
-                diametro_um = 2 * math.sqrt(area_um2 / math.pi)
-
-                # Aplica o crivo (filtro mínimo)
-                if usar_crivo and diametro_um < diametro_crivo_min:
-                    continue
-                
-                # Aplica o teto (filtro máximo para manchas unidas)
-                if usar_teto and diametro_um > diametro_teto_max:
-                    continue
-
-                soma_area_gotas_px += area_px
-                total_gotas += 1
-
-                # Cálculo exato do volume da esfera: V = (pi / 6) * D^3
-                volume_gota = (math.pi / 6.0) * (diametro_um ** 3)
-                
-                diametros_lista.append(diametro_um)
-                volumes_lista.append(volume_gota)
-
-                # Classificação dinâmica
-                if diametro_um < limite_pequena:
-                    pequenas += 1
-                elif limite_pequena <= diametro_um <= limite_media:
-                    medias += 1
-                else:
-                    grandes += 1
-
-        porcentagem_cobertura = (soma_area_gotas_px / total_pixels_img * 100.0) if total_pixels_img > 0 else 0.0
-
-        # Cálculo dos Diâmetros Volumétricos (D0.1, DMV/D0.5, D0.9)
-        d01, dmv, d09, span = 0.0, 0.0, 0.0, 0.0
-        if total_gotas > 0:
-            dados_ordenados = sorted(zip(diametros_lista, volumes_lista), key=lambda x: x[0])
-            d_arr = np.array([x[0] for x in dados_ordenados])
-            v_arr = np.array([x[1] for x in dados_ordenados])
-            
-            vol_acumulado = np.cumsum(v_arr)
-            vol_total = vol_acumulado[-1]
-            
-            if vol_total > 0:
-                vol_relativo = vol_acumulado / vol_total
-                
-                # Encontra os índices correspondentes aos percentis 10%, 50% e 90%
-                idx_10 = np.searchsorted(vol_relativo, 0.10)
-                idx_50 = np.searchsorted(vol_relativo, 0.50)
-                idx_90 = np.searchsorted(vol_relativo, 0.90)
-                
-                d01 = d_arr[min(idx_10, len(d_arr)-1)]
-                dmv = d_arr[min(idx_50, len(d_arr)-1)]
-                d09 = d_arr[min(idx_90, len(d_arr)-1)]
-                
-                if dmv > 0:
-                    span = (d09 - d01) / dmv
-
-    if mostrar_binaria:
-        st.subheader("🔍 Camada Binarizada")
-        img_binaria_rgb = cv2.cvtColor(img_binaria, cv2.COLOR_GRAY2RGB)
-        st.image(img_binaria_rgb, caption=f"Limiar Aplicado: {limiar_final} (Preto = Gotas, Branco = Fundo)", use_column_width=True)
-
-    st.success("Análise concluída com sucesso!")
-    
-    # Métricas Gerais
-    col1, col2 = st.columns(2)
-    col1.metric("Total de Gotas", f"{total_gotas}")
-    col2.metric("Área Coberta", f"{porcentagem_cobertura:.2f}%")
-
-    # Métricas Volumétricas (DMV, D0.1, D0.9)
-    st.subheader("🧪 Parâmetros Volumétricos (ASABE)")
-    col_v1, col_v2, col_v3, col_v4 = st.columns(4)
-    col_v1.metric("D0.1", f"{d01:.1f} µm")
-    col_v2.metric("DMV (D0.5)", f"{dmv:.1f} µm")
-    col_v3.metric("D0.9", f"{d09:.1f} µm")
-    col_v4.metric("Amplitude (Span)", f"{span:.2f}")
-
-    # Barra Visual Dinâmica para o Span (0 a 2, onde 0 é verde e 2 é vermelho)
-    if total_gotas > 0:
-        span_limitado = max(0.0, min(2.0, span))
-        percentual_barra = int((span_limitado / 2.0) * 100)
+        # Barra de progresso visual no Streamlit
+        barra_progresso = st.progress(0)
+        total_arquivos = len(uploaded_files)
         
-        if span < 1.2:
-            cor_hex = "#2e7d32"  # Verde
-            status_msg = "Excelente (Muito Homogêneo)"
-        elif span <= 1.6:
-            cor_hex = "#f57c00"  # Laranja
-            status_msg = "Moderado (Padrão Agrícola)"
-        else:
-            cor_hex = "#c62828"  # Vermelho
-            status_msg = "Alto (Heterogêneo)"
+        for i, uploaded_file in enumerate(uploaded_files):
+            # Abre a imagem
+            image_pil = Image.open(uploaded_file).convert('RGB')
+            img_original = np.array(image_pil)
+            img_original = cv2.cvtColor(img_original, cv2.COLOR_RGB2BGR)
 
-        st.markdown(f"""
-        <div style="margin-top: 10px; margin-bottom: 5px;">
-            <b>Avaliação de Homogeneidade (Span):</b> <span style="color: {cor_hex}; font-weight: bold;">{span:.2f} — {status_msg}</span>
-        </div>
-        <div style="background-color: #e0e0e0; border-radius: 6px; width: 100%; height: 14px; overflow: hidden;">
-            <div style="background-color: {cor_hex}; width: {percentual_barra}%; height: 100%; transition: width 0.4s ease;"></div>
-        </div>
-        <div style="display: flex; justify-content: space-between; font-size: 11px; color: #666; margin-top: 3px;">
-            <span>🟢 0.0 (Homogêneo)</span>
-            <span>1.0</span>
-            <span>🔴 2.0 (Heterogêneo)</span>
-        </div>
-        """, unsafe_allow_html=True)
+            altura_px, largura_px, _ = img_original.shape
+            total_pixels_img = largura_px * altura_px
 
-    # Distribuição por Contagem
-    st.markdown("---")
-    st.subheader(f"📊 Contagem por Tamanho (Pequenas < {limite_pequena}µm | Médias até {limite_media}µm)")
-    col3, col4, col5 = st.columns(3)
-    col3.metric("Pequenas", f"{pequenas}")
-    col4.metric("Médias", f"{medias}")
-    col5.metric("Grandes", f"{grandes}")
-    
-    st.info(f"ℹ️ Área de Referência: {area_fisica_cm2} cm² | Limiar Otsu: {limiar_otsu:.1f} + Ajuste: {sensibilidade_extra} = {limiar_final}")
+            # Canal de cor
+            if canal_cor == 'Azul':
+                img_canal = img_original[:, :, 0]
+            elif canal_cor == 'Verde':
+                img_canal = img_original[:, :, 1]
+            elif canal_cor == 'Vermelho':
+                img_canal = img_original[:, :, 2]
+            else:
+                img_canal = cv2.cvtColor(img_original, cv2.COLOR_BGR2GRAY)
+
+            # Otsu + Offset
+            limiar_otsu, _ = cv2.threshold(img_canal, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            limiar_final = int(max(0, min(255, limiar_otsu + sensibilidade_extra)))
+            _, img_binaria = cv2.threshold(img_canal, limiar_final, 255, cv2.THRESH_BINARY_INV)
+
+            # Calibração e Contornos
+            area_total_um2 = area_fisica_cm2 * 100000000.0
+            area_por_pixel_um2 = area_total_um2 / total_pixels_img if total_pixels_img > 0 else 1.0
+
+            contornos, _ = cv2.findContours(img_binaria, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            total_gotas = 0
+            soma_area_gotas_px = 0
+            diametros_lista = []
+            volumes_lista = []
+
+            for c in contornos:
+                area_px = cv2.contourArea(c)
+                if area_px > 0:
+                    area_um2 = area_px * area_por_pixel_um2
+                    diametro_um = 2 * math.sqrt(area_um2 / math.pi)
+
+                    if diametro_um <= diametro_teto_max: # Filtro de teto
+                        soma_area_gotas_px += area_px
+                        total_gotas += 1
+                        volume_gota = (math.pi / 6.0) * (diametro_um ** 3)
+                        diametros_lista.append(diametro_um)
+                        volumes_lista.append(volume_gota)
+
+            porcentagem_cobertura = (soma_area_gotas_px / total_pixels_img * 100.0) if total_pixels_img > 0 else 0.0
+
+            # Cálculos Volumétricos
+            d01, dmv, d09, span = 0.0, 0.0, 0.0, 0.0
+            if total_gotas > 0:
+                dados_ordenados = sorted(zip(diametros_lista, volumes_lista), key=lambda x: x[0])
+                d_arr = np.array([x[0] for x in dados_ordenados])
+                v_arr = np.array([x[1] for x in dados_ordenados])
+                
+                vol_acumulado = np.cumsum(v_arr)
+                vol_total = vol_acumulado[-1]
+                
+                if vol_total > 0:
+                    vol_relativo = vol_acumulado / vol_total
+                    idx_10 = np.searchsorted(vol_relativo, 0.10)
+                    idx_50 = np.searchsorted(vol_relativo, 0.50)
+                    idx_90 = np.searchsorted(vol_relativo, 0.90)
+                    
+                    d01 = d_arr[min(idx_10, len(d_arr)-1)]
+                    dmv = d_arr[min(idx_50, len(d_arr)-1)]
+                    d09 = d_arr[min(idx_90, len(d_arr)-1)]
+                    
+                    if dmv > 0:
+                        span = (d09 - d01) / dmv
+
+            # Salva os resultados desta imagem na lista do lote
+            resultados_lote.append({
+                "Arquivo": uploaded_file.name,
+                "Total de Gotas": total_gotas,
+                "Cobertura (%)": round(porcentagem_cobertura, 2),
+                "D0.1 (µm)": round(d01, 1),
+                "DMV / D0.5 (µm)": round(dmv, 1),
+                "D0.9 (µm)": round(d09, 1),
+                "Span": round(span, 2)
+            })
+
+            # Atualiza barra de progresso
+            barra_progresso.progress((i + 1) / total_arquivos)
+
+        # Converte a lista em DataFrame do Pandas
+        df_resultado = pd.DataFrame(resultados_lote)
+        
+        st.success("✅ Processamento do lote concluído com sucesso!")
+        st.dataframe(df_resultado)
+
+        # CRIAR ARQUIVO EXCEL PARA DOWNLOAD
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_resultado.to_excel(writer, index=False, sheet_name='Analise_Gotas')
+        processed_data = output.getvalue()
+
+        st.download_button(
+            label="📥 Baixar Relatório Consolidado em Excel (.xlsx)",
+            data=processed_data,
+            file_name="relatorio_gotas_lote.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 else:
-    st.info("👈 Por favor, envie uma foto para iniciar a análise.")
+    st.info("👈 Selecione várias fotos na caixa acima para iniciar o processamento em lote.")
