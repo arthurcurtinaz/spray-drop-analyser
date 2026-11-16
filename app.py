@@ -128,10 +128,22 @@ def processar_imagem_unica(img_bgr, limiar_aplicado, area_fisica_cm2, usar_crivo
     }
 
 
-# --- TÍTULO E ABAS DO APLICATIVO ---
+# --- TÍTULO E BARRA LATERAL DO APLICATIVO ---
 st.title("💧 Spray Drop Analyser — Análise de Papel Hidrossensível")
 
 modo_app = st.sidebar.radio("🧭 Modo de Operação", ["📊 Análise Individual", "📂 Análise em Lote (Excel)"])
+
+# Aparece na barra lateral logo abaixo da escolha do Modo de Operação quando o Lote está ativo
+metodo_otsu_lote = None
+if modo_app == "📂 Análise em Lote (Excel)":
+    metodo_otsu_lote = st.sidebar.radio(
+        "🎯 Limiar de Otsu no Lote:",
+        [
+            "Individual por foto",
+            "Global unificado (mesmo p/ todas)"
+        ],
+        help="Individual: calcula um Otsu para cada imagem. Global: calcula a mediana de Otsu do lote inteiro e aplica o mesmo corte a todas as fotos."
+    )
 
 # --- BARRA LATERAL DE CONFIGURAÇÕES GLOBAIS ---
 st.sidebar.markdown("---")
@@ -242,16 +254,6 @@ if modo_app == "📊 Análise Individual":
 # ==========================================
 else:
     st.write("📂 Faça o upload de **várias fotos** de uma vez para processar o lote completo e gerar a planilha detalhada em Excel.")
-    
-    # Seleção do método de limiarização para o lote
-    metodo_otsu_lote = st.radio(
-        "🎯 Método de Cálculo do Limiar de Otsu para o Lote:",
-        [
-            "Individual por foto (calcula um limiar específico para cada imagem)",
-            "Global unificado (calcula o limiar ideal do conjunto e aplica o mesmo a todas)"
-        ],
-        help="O modo Global calcula a mediana dos limiares de Otsu de todas as imagens carregadas, evitando distorções em cartões com poucas gotas."
-    )
     
     uploaded_files = st.file_uploader(
         "Selecione as fotos do papel hidrossensível", 
