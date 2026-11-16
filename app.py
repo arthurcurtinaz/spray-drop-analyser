@@ -38,6 +38,96 @@ pwa_code = """
 """
 st.markdown(pwa_code, unsafe_allow_html=True)
 
+# --- FUNÇÃO AUXILIAR DE PROCESSAMENTO ---
+def processar_imagem_unica(img_bgr, limiar_aplicado, area_fisica_cm2, usar_crivo, diametro_crivo_min, usar_teto, diametro_teto_max, limite_pequena, limite_grande, desenhar_contornos=False):
+    altura_px, largura_px, _ = img_bgr.shape
+    total_pixels_img = largura_px * altura_px
+
+    # Canal Verde fixo (índice 1 no padrão BGR do OpenCV)
+    img_canal = img_bgr[:, :, 1]
+    _, img_binaria = cv2.threshold(img_canal, limiar_aplicado, 255, cv2.THRESH_BINARY_INV)
+
+    area_total_um2 = area_fisica_cm2 * 100000000.0
+    area_por_pixel_um2 = area_total_um2 / total_pixels_img if total_pixels_img > 0 else 1.0
+
+    contornos, _ = cv2.findContours(img_binaria, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    total_gotas = 0
+    gotas_finas = 0
+    gotas_medias = 0
+    gotas_grossas = 0
+    soma_area_gotas_px = 0
+    
+    diametros_lista = []
+    volumes_lista = []
+    img_contornos = img_bgr.copy() if desenhar_contornos else None
+
+    for c in contornos:
+        area_px = cv2.contourArea(c)
+        if area_px > 0:
+            area_um2 = area_px * area_por_pixel_um2
+            diametro_um = 2 * math.sqrt(area_um2 / math.pi)
+
+            if usar_crivo and diametro_um < diametro_crivo_min:
+                continue
+            if usar_teto and diametro_um > diametro_teto_max:
+                continue
+
+            soma_area_gotas_px += area_px
+            total_gotas += 1
+
+            volume_gota = (math.pi / 6.0) * (diametro_um ** 3)
+            diametros_lista.append(diametro_um)
+            volumes_lista.append(volume_gota)
+
+            if diametro_um < limite_pequena:
+                gotas_finas += 1
+            elif diametro_um > limite_grande:
+                gotas_grossas += 1
+            else:
+                gotas_medias += 1
+
+            if desenhar_contornos:
+                cv2.drawContours(img_contornos, [c], -1, (0, 255, 0), 2)
+
+    porcentagem_cobertura = (soma_area_gotas_px / total_pixels_img * 100.0) if total_pixels_img > 0 else 0.0
+
+    d01, dmv, d09, span = 0.0, 0.0, 0.0, 0.0
+    if total_gotas > 0:
+        dados_ordenados = sorted(zip(diametros_lista, volumes_lista), key=lambda x: x[0])
+        d_arr = np.array([x[0] for x in dados_ordenados])
+        v_arr = np.array([x[1] for x in dados_ordenados])
+        
+        vol_acumulado = np.cumsum(v_arr)
+        vol_total = vol_acumulado[-1]
+        
+        if vol_total > 0:
+            vol_relativo = vol_acumulado / vol_total
+            idx_10 = np.searchsorted(vol_relativo, 0.10)
+            idx_50 = np.searchsorted(vol_relativo, 0.50)
+            idx_90 = np.searchsorted(vol_relativo, 0.90)
+            
+            d01 = d_arr[min(idx_10, len(d_arr)-1)]
+            dmv = d_arr[min(idx_50, len(d_arr)-1)]
+            d09 = d_arr[min(idx_90, len(d_arr)-1)]
+            
+            if dmv > 0:
+                span = (d09 - d01) / dmv
+
+    return {
+        "total_gotas": total_gotas,
+        "cobertura": porcentagem_cobertura,
+        "finas": gotas_finas,
+        "medias": gotas_medias,
+        "grossas": gotas_grossas,
+        "d01": d01,
+        "dmv": dmv,
+        "d09": d09,
+        "span": span,
+        "img_contornos": img_contornos
+    }
+
+
 # --- TÍTULO E ABAS DO APLICATIVO ---
 st.title("💧 Spray Drop Analyser — Análise de Papel Hidrossensível")
 
@@ -58,8 +148,6 @@ elif "1.00" in tipo_papel:
     area_fisica_cm2 = 1.00
 else:
     area_fisica_cm2 = 19.75
-
-canal_cor = st.sidebar.selectbox("Canal de Cor", ["Azul", "Verde", "Vermelho", "Cinza"], index=0)
 
 sensibilidade_extra = st.sidebar.slider(
     "Ajuste Fino do Limiar (Offset)", 
@@ -89,7 +177,7 @@ if usar_teto:
 # MODO 1: ANÁLISE INDIVIDUAL
 # ==========================================
 if modo_app == "📊 Análise Individual":
-    st.write("Faça o upload de uma foto individual para visualizar o limiar calculado, binarização, contornos e o relatório detalhado.")
+    st.write("Faça o upload de uma foto individual para visualizar o limiar calculado (Canal Verde), binarização, contornos e o relatório detalhado.")
     
     uploaded_file = st.file_uploader("📂 Escolha a foto do papel hidrossensível", type=["jpg", "jpeg", "png"])
     
@@ -98,126 +186,52 @@ if modo_app == "📊 Análise Individual":
         img_original = np.array(image_pil)
         img_original = cv2.cvtColor(img_original, cv2.COLOR_RGB2BGR)
 
-        altura_px, largura_px, _ = img_original.shape
-        total_pixels_img = largura_px * altura_px
-
-        if canal_cor == 'Azul':
-            img_canal = img_original[:, :, 0]
-        elif canal_cor == 'Verde':
-            img_canal = img_original[:, :, 1]
-        elif canal_cor == 'Vermelho':
-            img_canal = img_original[:, :, 2]
-        else:
-            img_canal = cv2.cvtColor(img_original, cv2.COLOR_BGR2GRAY)
-
-        # Cálculo de Otsu e Limiar Final
+        # Canal Verde fixo
+        img_canal = img_original[:, :, 1]
         limiar_otsu, _ = cv2.threshold(img_canal, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         limiar_final = int(max(0, min(255, limiar_otsu + sensibilidade_extra)))
-        _, img_binaria = cv2.threshold(img_canal, limiar_final, 255, cv2.THRESH_BINARY_INV)
 
-        area_total_um2 = area_fisica_cm2 * 100000000.0
-        area_por_pixel_um2 = area_total_um2 / total_pixels_img if total_pixels_img > 0 else 1.0
-
-        contornos, _ = cv2.findContours(img_binaria, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        total_gotas = 0
-        gotas_finas = 0
-        gotas_medias = 0
-        gotas_grossas = 0
-        soma_area_gotas_px = 0
-        
-        diametros_lista = []
-        volumes_lista = []
-        img_contornos = img_original.copy()
-
-        for c in contornos:
-            area_px = cv2.contourArea(c)
-            if area_px > 0:
-                area_um2 = area_px * area_por_pixel_um2
-                diametro_um = 2 * math.sqrt(area_um2 / math.pi)
-
-                if usar_crivo and diametro_um < diametro_crivo_min:
-                    continue
-                if usar_teto and diametro_um > diametro_teto_max:
-                    continue
-
-                soma_area_gotas_px += area_px
-                total_gotas += 1
-
-                volume_gota = (math.pi / 6.0) * (diametro_um ** 3)
-                diametros_lista.append(diametro_um)
-                volumes_lista.append(volume_gota)
-
-                if diametro_um < limite_pequena:
-                    gotas_finas += 1
-                elif diametro_um > limite_grande:
-                    gotas_grossas += 1
-                else:
-                    gotas_medias += 1
-
-                cv2.drawContours(img_contornos, [c], -1, (0, 255, 0), 2)
-
-        porcentagem_cobertura = (soma_area_gotas_px / total_pixels_img * 100.0) if total_pixels_img > 0 else 0.0
-
-        d01, dmv, d09, span = 0.0, 0.0, 0.0, 0.0
-        if total_gotas > 0:
-            dados_ordenados = sorted(zip(diametros_lista, volumes_lista), key=lambda x: x[0])
-            d_arr = np.array([x[0] for x in dados_ordenados])
-            v_arr = np.array([x[1] for x in dados_ordenados])
-            
-            vol_acumulado = np.cumsum(v_arr)
-            vol_total = vol_acumulado[-1]
-            
-            if vol_total > 0:
-                vol_relativo = vol_acumulado / vol_total
-                idx_10 = np.searchsorted(vol_relativo, 0.10)
-                idx_50 = np.searchsorted(vol_relativo, 0.50)
-                idx_90 = np.searchsorted(vol_relativo, 0.90)
-                
-                d01 = d_arr[min(idx_10, len(d_arr)-1)]
-                dmv = d_arr[min(idx_50, len(d_arr)-1)]
-                d09 = d_arr[min(idx_90, len(d_arr)-1)]
-                
-                if dmv > 0:
-                    span = (d09 - d01) / dmv
+        res = processar_imagem_unica(
+            img_original, limiar_final, area_fisica_cm2,
+            usar_crivo, diametro_crivo_min, usar_teto, diametro_teto_max,
+            limite_pequena, limite_grande, desenhar_contornos=True
+        )
 
         # Layout de Exibição de Imagens
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Imagem Original")
-            st.image(image_pil, use_column_width=True)
+            st.image(image_pil, use_container_width=True)
         with col2:
             st.subheader("Gotas Detectadas")
-            img_contornos_rgb = cv2.cvtColor(img_contornos, cv2.COLOR_BGR2RGB)
-            st.image(img_contornos_rgb, use_column_width=True)
+            img_contornos_rgb = cv2.cvtColor(res["img_contornos"], cv2.COLOR_BGR2RGB)
+            st.image(img_contornos_rgb, use_container_width=True)
 
         st.markdown("---")
         
-        # Exibição do Limiar Calculado por Otsu
-        st.info(f"🔍 **Parâmetros de Binarização:** Limiar base de Otsu = **{int(limiar_otsu)}** | Limiar Aplicado (com Offset) = **{limiar_final}**")
+        st.info(f"🔍 **Parâmetros de Binarização (Canal Verde):** Limiar base de Otsu = **{int(limiar_otsu)}** | Limiar Aplicado (com Offset) = **{limiar_final}**")
 
         st.subheader("📈 Relatório de Resultados")
         
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total de Gotas", total_gotas)
-        m2.metric("Cobertura", f"{porcentagem_cobertura:.2f}%")
-        m3.metric("DMV (D0.5)", f"{dmv:.1f} µm")
-        m4.metric("Span", f"{span:.2f}")
+        m1.metric("Total de Gotas", res["total_gotas"])
+        m2.metric("Cobertura", f"{res['cobertura']:.2f}%")
+        m3.metric("DMV (D0.5)", f"{res['dmv']:.1f} µm")
+        m4.metric("Span", f"{res['span']:.2f}")
 
         r1, r2, r3, r4, r5 = st.columns(5)
-        r1.metric("D0.1", f"{d01:.1f} µm")
-        r2.metric("D0.9", f"{d09:.1f} µm")
-        r3.metric(f"Finas (<{limite_pequena}µm)", gotas_finas)
-        r4.metric("Médias", gotas_medias)
-        r5.metric(f"Grossas (>{limite_grande}µm)", gotas_grossas)
+        r1.metric("D0.1", f"{res['d01']:.1f} µm")
+        r2.metric("D0.9", f"{res['d09']:.1f} µm")
+        r3.metric(f"Finas (<{limite_pequena}µm)", res["finas"])
+        r4.metric("Médias", res["medias"])
+        r5.metric(f"Grossas (>{limite_grande}µm)", res["grossas"])
 
-        # Barra de Homogeneidade do Span (0 a 2)
         st.markdown("### 📊 Indicador de Homogeneidade (Span)")
-        span_proporcao = min(max(span / 2.0, 0.0), 1.0)
+        span_proporcao = min(max(res["span"] / 2.0, 0.0), 1.0)
         st.progress(span_proporcao)
-        if span < 1.0:
+        if res["span"] < 1.0:
             st.success("✅ **Homogeneidade Excelente:** Span baixo (< 1.0) indica gotas de tamanhos muito uniformes.")
-        elif span <= 1.5:
+        elif res["span"] <= 1.5:
             st.warning("⚠️ **Homogeneidade Moderada:** Span entre 1.0 e 1.5.")
         else:
             st.error("❌ **Homogeneidade Baixa:** Span alto (> 1.5) indica alta dispersão de tamanhos de gotas.")
@@ -228,6 +242,16 @@ if modo_app == "📊 Análise Individual":
 # ==========================================
 else:
     st.write("📂 Faça o upload de **várias fotos** de uma vez para processar o lote completo e gerar a planilha detalhada em Excel.")
+    
+    # Seleção do método de limiarização para o lote
+    metodo_otsu_lote = st.radio(
+        "🎯 Método de Cálculo do Limiar de Otsu para o Lote:",
+        [
+            "Individual por foto (calcula um limiar específico para cada imagem)",
+            "Global unificado (calcula o limiar ideal do conjunto e aplica o mesmo a todas)"
+        ],
+        help="O modo Global calcula a mediana dos limiares de Otsu de todas as imagens carregadas, evitando distorções em cartões com poucas gotas."
+    )
     
     uploaded_files = st.file_uploader(
         "Selecione as fotos do papel hidrossensível", 
@@ -243,108 +267,66 @@ else:
             barra_progresso = st.progress(0)
             total_arquivos = len(uploaded_files)
             
-            for i, uploaded_file in enumerate(uploaded_files):
+            # 1ª Etapa: Carregar imagens e calcular o Otsu individual de cada uma
+            imagens_carregadas = []
+            otsus_individuais = []
+            
+            for uploaded_file in uploaded_files:
                 image_pil = Image.open(uploaded_file).convert('RGB')
                 img_original = np.array(image_pil)
                 img_original = cv2.cvtColor(img_original, cv2.COLOR_RGB2BGR)
-
-                altura_px, largura_px, _ = img_original.shape
-                total_pixels_img = largura_px * altura_px
-
-                if canal_cor == 'Azul':
-                    img_canal = img_original[:, :, 0]
-                elif canal_cor == 'Verde':
-                    img_canal = img_original[:, :, 1]
-                elif canal_cor == 'Vermelho':
-                    img_canal = img_original[:, :, 2]
-                else:
-                    img_canal = cv2.cvtColor(img_original, cv2.COLOR_BGR2GRAY)
-
+                
+                # Canal Verde fixo
+                img_canal = img_original[:, :, 1]
                 limiar_otsu, _ = cv2.threshold(img_canal, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                limiar_final = int(max(0, min(255, limiar_otsu + sensibilidade_extra)))
-                _, img_binaria = cv2.threshold(img_canal, limiar_final, 255, cv2.THRESH_BINARY_INV)
+                
+                imagens_carregadas.append((uploaded_file.name, img_original, limiar_otsu))
+                otsus_individuais.append(limiar_otsu)
+            
+            # Define se o Otsu será global (mediana do lote) ou individual
+            usar_global = "Global" in metodo_otsu_lote
+            otsu_global_calculado = int(np.median(otsus_individuais)) if usar_global else None
+            
+            if usar_global:
+                limiar_global_final = int(max(0, min(255, otsu_global_calculado + sensibilidade_extra)))
+                st.info(f"🌐 **Limiar Global Unificado Calculado:** Otsu Mediano = **{otsu_global_calculado}** | Aplicado a todas (com Offset) = **{limiar_global_final}**")
 
-                area_total_um2 = area_fisica_cm2 * 100000000.0
-                area_por_pixel_um2 = area_total_um2 / total_pixels_img if total_pixels_img > 0 else 1.0
+            # 2ª Etapa: Processar cada imagem com o limiar escolhido
+            for i, (nome_arquivo, img_original, otsu_ind) in enumerate(imagens_carregadas):
+                if usar_global:
+                    otsu_base_exibir = otsu_global_calculado
+                    limiar_final = limiar_global_final
+                else:
+                    otsu_base_exibir = int(otsu_ind)
+                    limiar_final = int(max(0, min(255, otsu_ind + sensibilidade_extra)))
 
-                contornos, _ = cv2.findContours(img_binaria, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-                total_gotas = 0
-                gotas_finas = 0
-                gotas_medias = 0
-                gotas_grossas = 0
-                soma_area_gotas_px = 0
-                diametros_lista = []
-                volumes_lista = []
-
-                for c in contornos:
-                    area_px = cv2.contourArea(c)
-                    if area_px > 0:
-                        area_um2 = area_px * area_por_pixel_um2
-                        diametro_um = 2 * math.sqrt(area_um2 / math.pi)
-
-                        if usar_crivo and diametro_um < diametro_crivo_min:
-                            continue
-                        if usar_teto and diametro_um > diametro_teto_max:
-                            continue
-
-                        soma_area_gotas_px += area_px
-                        total_gotas += 1
-                        volume_gota = (math.pi / 6.0) * (diametro_um ** 3)
-                        diametros_lista.append(diametro_um)
-                        volumes_lista.append(volume_gota)
-
-                        if diametro_um < limite_pequena:
-                            gotas_finas += 1
-                        elif diametro_um > limite_grande:
-                            gotas_grossas += 1
-                        else:
-                            gotas_medias += 1
-
-                porcentagem_cobertura = (soma_area_gotas_px / total_pixels_img * 100.0) if total_pixels_img > 0 else 0.0
-
-                d01, dmv, d09, span = 0.0, 0.0, 0.0, 0.0
-                if total_gotas > 0:
-                    dados_ordenados = sorted(zip(diametros_lista, volumes_lista), key=lambda x: x[0])
-                    d_arr = np.array([x[0] for x in dados_ordenados])
-                    v_arr = np.array([x[1] for x in dados_ordenados])
-                    
-                    vol_acumulado = np.cumsum(v_arr)
-                    vol_total = vol_acumulado[-1]
-                    
-                    if vol_total > 0:
-                        vol_relativo = vol_acumulado / vol_total
-                        idx_10 = np.searchsorted(vol_relativo, 0.10)
-                        idx_50 = np.searchsorted(vol_relativo, 0.50)
-                        idx_90 = np.searchsorted(vol_relativo, 0.90)
-                        
-                        d01 = d_arr[min(idx_10, len(d_arr)-1)]
-                        dmv = d_arr[min(idx_50, len(d_arr)-1)]
-                        d09 = d_arr[min(idx_90, len(d_arr)-1)]
-                        
-                        if dmv > 0:
-                            span = (d09 - d01) / dmv
+                res = processar_imagem_unica(
+                    img_original, limiar_final, area_fisica_cm2,
+                    usar_crivo, diametro_crivo_min, usar_teto, diametro_teto_max,
+                    limite_pequena, limite_grande, desenhar_contornos=False
+                )
 
                 resultados_lote.append({
-                    "Arquivo": uploaded_file.name,
-                    "Limiar Otsu": int(limiar_otsu),
+                    "Arquivo": nome_arquivo,
+                    "Modo Limiar": "Global" if usar_global else "Individual",
+                    "Limiar Otsu": otsu_base_exibir,
                     "Limiar Usado": limiar_final,
-                    "Total Gotas": total_gotas,
-                    "Cobertura (%)": round(porcentagem_cobertura, 2),
-                    f"Gotas Finas (<{limite_pequena}µm)": gotas_finas,
-                    "Gotas Médias": gotas_medias,
-                    f"Gotas Grossas (>{limite_grande}µm)": gotas_grossas,
-                    "D0.1 (µm)": round(d01, 1),
-                    "DMV / D0.5 (µm)": round(dmv, 1),
-                    "D0.9 (µm)": round(d09, 1),
-                    "Span": round(span, 2)
+                    "Total Gotas": res["total_gotas"],
+                    "Cobertura (%)": round(res["cobertura"], 2),
+                    f"Gotas Finas (<{limite_pequena}µm)": res["finas"],
+                    "Gotas Médias": res["medias"],
+                    f"Gotas Grossas (>{limite_grande}µm)": res["grossas"],
+                    "D0.1 (µm)": round(res["d01"], 1),
+                    "DMV / D0.5 (µm)": round(res["dmv"], 1),
+                    "D0.9 (µm)": round(res["d09"], 1),
+                    "Span": round(res["span"], 2)
                 })
 
                 barra_progresso.progress((i + 1) / total_arquivos)
 
             df_resultado = pd.DataFrame(resultados_lote)
             st.success("✅ Lote processado com sucesso!")
-            st.dataframe(df_resultado)
+            st.dataframe(df_resultado, use_container_width=True)
 
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
