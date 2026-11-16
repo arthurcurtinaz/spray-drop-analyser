@@ -93,6 +93,9 @@ def processar_imagem_unica(img_bgr, limiar_aplicado, area_fisica_cm2, usar_crivo
     porcentagem_cobertura = (soma_area_gotas_px / total_pixels_img * 100.0) if total_pixels_img > 0 else 0.0
 
     d01, dmv, d09, span = 0.0, 0.0, 0.0, 0.0
+    pct_vol_deriva = 0.0
+    pct_vol_escorrimento = 0.0
+
     if total_gotas > 0:
         dados_ordenados = sorted(zip(diametros_lista, volumes_lista), key=lambda x: x[0])
         d_arr = np.array([x[0] for x in dados_ordenados])
@@ -114,6 +117,14 @@ def processar_imagem_unica(img_bgr, limiar_aplicado, area_fisica_cm2, usar_crivo
             if dmv > 0:
                 span = (d09 - d01) / dmv
 
+            # Cálculo % Volume em gotas < 150 µm (Potencial de Deriva)
+            vol_deriva = np.sum(v_arr[d_arr < 150.0])
+            pct_vol_deriva = (vol_deriva / vol_total) * 100.0
+
+            # Cálculo % Volume em gotas > 600 µm (Potencial de Escorrimento)
+            vol_escorrimento = np.sum(v_arr[d_arr > 600.0])
+            pct_vol_escorrimento = (vol_escorrimento / vol_total) * 100.0
+
     return {
         "total_gotas": total_gotas,
         "cobertura": porcentagem_cobertura,
@@ -124,6 +135,8 @@ def processar_imagem_unica(img_bgr, limiar_aplicado, area_fisica_cm2, usar_crivo
         "dmv": dmv,
         "d09": d09,
         "span": span,
+        "pct_vol_deriva": pct_vol_deriva,
+        "pct_vol_escorrimento": pct_vol_escorrimento,
         "img_contornos": img_contornos
     }
 
@@ -133,7 +146,6 @@ st.title("💧 Spray Drop Analyser — Análise de Papel Hidrossensível")
 
 modo_app = st.sidebar.radio("🧭 Modo de Operação", ["📊 Análise Individual", "📂 Análise em Lote (Excel)"])
 
-# Aparece na barra lateral logo abaixo da escolha do Modo de Operação quando o Lote está ativo
 metodo_otsu_lote = None
 if modo_app == "📂 Análise em Lote (Excel)":
     metodo_otsu_lote = st.sidebar.radio(
@@ -198,7 +210,6 @@ if modo_app == "📊 Análise Individual":
         img_original = np.array(image_pil)
         img_original = cv2.cvtColor(img_original, cv2.COLOR_RGB2BGR)
 
-        # Canal Verde fixo
         img_canal = img_original[:, :, 1]
         limiar_otsu, _ = cv2.threshold(img_canal, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         limiar_final = int(max(0, min(255, limiar_otsu + sensibilidade_extra)))
@@ -248,6 +259,34 @@ if modo_app == "📊 Análise Individual":
         else:
             st.error("❌ **Homogeneidade Baixa:** Span alto (> 1.5) indica alta dispersão de tamanhos de gotas.")
 
+        # --- QUADRO SEPARADO: RISCOS DE PERDA DE CALDA (DERIVA E ESCORRIMENTO) ---
+        st.markdown("---")
+        with st.container(border=True):
+            st.subheader("⚠️ Análise Volumétrica de Risco de Perdas")
+            p1, p2 = st.columns(2)
+            
+            with p1:
+                st.metric(
+                    label="💨 Volume em Gotas < 150 µm (Potencial de Deriva)",
+                    value=f"{res['pct_vol_deriva']:.2f}%",
+                    help="Porcentagem do volume total de calda concentrada em gotas menores que 150 µm, suscetíveis ao arraste pelo vento ou evaporação."
+                )
+                if res['pct_vol_deriva'] > 15.0:
+                    st.caption("🔴 Atenção: Alto percentual de volume sujeito à deriva (> 15%).")
+                else:
+                    st.caption("🟢 Nível de deriva dentro de limites aceitáveis.")
+                    
+            with p2:
+                st.metric(
+                    label="🌊 Volume em Gotas > 600 µm (Potencial de Escorrimento)",
+                    value=f"{res['pct_vol_escorrimento']:.2f}%",
+                    help="Porcentagem do volume total de calda concentrada em gotas maiores que 600 µm, que tendem a coalescer e escorrer da folha."
+                )
+                if res['pct_vol_escorrimento'] > 15.0:
+                    st.caption("🔴 Atenção: Alto percentual de volume sujeito a escorrimento (> 15%).")
+                else:
+                    st.caption("🟢 Risco de escorrimento controlado.")
+
 
 # ==========================================
 # MODO 2: ANÁLISE EM LOTE E EXPORTAÇÃO EXCEL
@@ -269,7 +308,6 @@ else:
             barra_progresso = st.progress(0)
             total_arquivos = len(uploaded_files)
             
-            # 1ª Etapa: Carregar imagens e calcular o Otsu individual de cada uma
             imagens_carregadas = []
             otsus_individuais = []
             
@@ -278,14 +316,12 @@ else:
                 img_original = np.array(image_pil)
                 img_original = cv2.cvtColor(img_original, cv2.COLOR_RGB2BGR)
                 
-                # Canal Verde fixo
                 img_canal = img_original[:, :, 1]
                 limiar_otsu, _ = cv2.threshold(img_canal, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                 
                 imagens_carregadas.append((uploaded_file.name, img_original, limiar_otsu))
                 otsus_individuais.append(limiar_otsu)
             
-            # Define se o Otsu será global (mediana do lote) ou individual
             usar_global = "Global" in metodo_otsu_lote
             otsu_global_calculado = int(np.median(otsus_individuais)) if usar_global else None
             
@@ -293,7 +329,6 @@ else:
                 limiar_global_final = int(max(0, min(255, otsu_global_calculado + sensibilidade_extra)))
                 st.info(f"🌐 **Limiar Global Unificado Calculado:** Otsu Mediano = **{otsu_global_calculado}** | Aplicado a todas (com Offset) = **{limiar_global_final}**")
 
-            # 2ª Etapa: Processar cada imagem com o limiar escolhido
             for i, (nome_arquivo, img_original, otsu_ind) in enumerate(imagens_carregadas):
                 if usar_global:
                     otsu_base_exibir = otsu_global_calculado
@@ -321,7 +356,9 @@ else:
                     "D0.1 (µm)": round(res["d01"], 1),
                     "DMV / D0.5 (µm)": round(res["dmv"], 1),
                     "D0.9 (µm)": round(res["d09"], 1),
-                    "Span": round(res["span"], 2)
+                    "Span": round(res["span"], 2),
+                    "Vol. < 150µm - Deriva (%)": round(res["pct_vol_deriva"], 2),
+                    "Vol. > 600µm - Escorrimento (%)": round(res["pct_vol_escorrimento"], 2)
                 })
 
                 barra_progresso.progress((i + 1) / total_arquivos)
